@@ -43,3 +43,11 @@ python tools\extract_portable.py `
 
 脚本会顺带清掉 `Zone.Identifier`。**不要用资源管理器「全部解压缩」**：中文名会乱码，
 而且会把 MOTW 标记带进去，浏览器直接起不来。
+
+## 仓库与发布
+
+* 本目录是独立仓库：https://github.com/666poyi666-collab/eryou-assistant
+* 便携版发布包走 Releases（`v0.2.0`），不入源码树；本地留档在 `发布存档\`
+* 上级目录 `..\`（`二游自动`）是另一个仓库 `er-you-auto-workspace`（原神/异环自动化），
+  它用 `.gitignore` 把本目录排除掉，两边互不干扰
+
