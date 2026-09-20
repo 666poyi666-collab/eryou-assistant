@@ -202,8 +202,18 @@ def test_runtime_fixes_are_installed_before_main_window() -> None:
     assert "WA_ShowWithoutActivating" in source
     assert "sync_game_no_activate" not in source
     assert "WS_EX_NOACTIVATE" not in source
-    assert 'ELEVATED_INPUT_HELPER_ENV = "MABAO_ENABLE_ELEVATED_INPUT_HELPER"' in source
-    assert 'os.environ.get(ELEVATED_INPUT_HELPER_ENV, "").strip() != "1"' in source
+    # 提权助手策略（2026-09-20 修订）：默认开启，因为原神是提权进程（rid=0x3000），
+    # 普通进程的 RegisterHotKey / 低级钩子在提权窗口前台时会被 UIPI 全部挡掉。
+    # 但必须满足安全约束：不复制到 Program Files、不注册 ONLOGON 自启、
+    # 任务是一次性提权启动器、可用环境变量关掉、助手随主程序退出。
+    assert "MABAO_DISABLE_ELEVATED_INPUT_HELPER" in source
+    helper_source = (ROOT / "elevated_input_helper.py").read_text(encoding="utf-8")
+    assert "MabaoLocalInputHelper" not in source
+    assert "MabaoLocalInputHelper" not in helper_source
+    assert '"ONLOGON"' not in source
+    assert '"ONLOGON"' not in helper_source
+    assert '"ONCE"' in helper_source  # 一次性提权启动器，不再常驻自启
+    assert '"--install-task"' in source
     assert "AddScriptToExecuteOnDocumentCreatedAsync" in source
     assert "Bilibili guest script registration queued" in source
     assert "load_bilibili_guest_hd_script()" in source

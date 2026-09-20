@@ -493,12 +493,23 @@ def setup_runtime_logging() -> None:
 
 
 def start_elevated_input_helper() -> None:
-    # A low-level global hook running elevated is not safe as a normal startup
-    # dependency: anti-cheat software may terminate the game, and it violates
-    # the local build's no-admin-by-default contract.  Keep the legacy helper
-    # available only as an explicit opt-in for users who knowingly need it for
-    # an elevated game process.
-    if os.environ.get(ELEVATED_INPUT_HELPER_ENV, "").strip() != "1":
+    """按需拉起提权输入助手（默认开启，可用环境变量关掉）。
+
+    为什么必须是提权进程：本机实测原神是「高完整性 / 已提权」进程
+    （YuanShen.exe rid=0x3000，二游辅助是 0x2000）。Windows 的 UIPI 会让普通进程的
+    RegisterHotKey 和低级键盘钩子在提权窗口前台时全部失效——日志里游戏前台那段
+    只有提权助手在派发按键（source=native），本地 Raw Input 的键盘通路一条都没有。
+    所以「进游戏后快捷键失效」的唯一解就是助手以同等完整性运行。
+
+    与老版本的区别（安全性）：
+      * 不再复制到 Program Files，助手就在程序目录里跑；
+      * 计划任务不再是 ONLOGON 常驻自启，而是一次性（2030 年才触发）任务，
+        只作为「提权启动器」被 /Run 调用；
+      * 助手自己会在主程序消失 30~60 秒后退出（elevated_input_helper.monitor_target），
+        所以提权全局钩子的存活时间 = 主程序存活时间；
+      * 设置 MABAO_DISABLE_ELEVATED_INPUT_HELPER=1 可以完全关掉。
+    """
+    if os.environ.get("MABAO_DISABLE_ELEVATED_INPUT_HELPER", "").strip() == "1":
         return
     if not getattr(sys, "frozen", False):
         return
@@ -509,47 +520,50 @@ def start_elevated_input_helper() -> None:
     helper = Path(sys.executable).with_name("mabao-game-input-helper.exe")
     if not helper.is_file():
         return
-    secure_helper = (
-        Path(os.environ.get("ProgramFiles", r"C:\Program Files"))
-        / "MabaoLocalInputHelper"
-        / "mabao-game-input-helper.exe"
-    )
     logger = importlib.import_module("app.logger").get_logger("local.game_input_helper")
-    query = subprocess.run(
-        ["schtasks", "/Query", "/TN", GAME_INPUT_TASK],
-        capture_output=True,
-        creationflags=subprocess.CREATE_NO_WINDOW,
-        check=False,
-    )
-    helper_matches = False
-    if secure_helper.is_file():
-        helper_matches = (
-            hashlib.sha256(helper.read_bytes()).digest()
-            == hashlib.sha256(secure_helper.read_bytes()).digest()
-        )
-    if query.returncode == 0 and helper_matches:
-        run = subprocess.run(
-            ["schtasks", "/Run", "/TN", GAME_INPUT_TASK],
+    task_action = f'"{helper}" --daemon'
+
+    def run(*arguments: str) -> subprocess.CompletedProcess:
+        # 注意：不要指定 encoding="utf-8" —— schtasks 在这台机器上输出 GBK，
+        # 按 UTF-8 解码会把中文路径变成乱码，导致「任务已存在」判断失败、
+        # 每次启动都重新注册一次（还会弹 UAC）。交给 text=True 用本地编码。
+        return subprocess.run(
+            ["schtasks", *arguments],
             capture_output=True,
+            text=True,
             creationflags=subprocess.CREATE_NO_WINDOW,
             check=False,
         )
-        logger.info("Elevated input helper task start: returncode=%s", run.returncode)
+
+    def task_ready() -> bool:
+        query = run("/Query", "/TN", GAME_INPUT_TASK, "/FO", "LIST", "/V")
+        if query.returncode != 0:
+            return False
+        # 程序被搬到别处后，任务里的路径会过期，需要重建
+        stdout = (query.stdout or "").replace('"', "")
+        return str(helper).casefold() in stdout.casefold()
+
+    if not task_ready():
+        # 任务不存在或指向旧路径：需要用管理员权限注册一次（会弹一次 UAC），
+        # 之后每次启动都只是 schtasks /Run，不再打扰用户。
+        result = windll.shell32.ShellExecuteW(
+            None, "runas", str(helper), "--install-task", str(helper.parent), 0
+        )
+        logger.info(
+            "提权助手首次注册已请求（shell_result=%s，需在 UAC 里允许一次）", result
+        )
         return
-    result = windll.shell32.ShellExecuteW(
-        None,
-        "runas",
-        str(helper),
-        "--install-task",
-        str(helper.parent),
-        0,
-    )
+
+    start = run("/Run", "/TN", GAME_INPUT_TASK)
     logger.info(
-        "Elevated input helper setup requested: task_exists=%s helper_matches=%s shell_result=%s",
-        query.returncode == 0,
-        helper_matches,
-        result,
+        "提权输入助手已请求启动: returncode=%s（游戏是提权进程时，只有它能接管快捷键）",
+        start.returncode,
     )
+    if start.returncode != 0:
+        result = windll.shell32.ShellExecuteW(
+            None, "runas", str(helper), "--daemon", str(helper.parent), 0
+        )
+        logger.info("任务启动失败，改为直接提权启动: shell_result=%s（UAC 需确认）", result)
 
 
 def should_prevent_window_activation(game_foreground: bool, control_down: bool) -> bool:

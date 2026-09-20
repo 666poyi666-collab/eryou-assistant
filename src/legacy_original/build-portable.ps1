@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 <#
 .SYNOPSIS
   从「已有一份能跑的便携包」重新构建 二游辅助.exe，并组装出新的便携包。
@@ -34,10 +34,13 @@ $spec = Join-Path $legacyRoot 'packaging\eryou_portable.spec'
 $distExe = Join-Path $repoRoot 'build\dist\二游辅助\二游辅助.exe'
 $inspector = Join-Path $repoRoot 'tools\inspect_pyz.py'
 $overrideTool = Join-Path $repoRoot 'tools\apply_runtime_overrides.py'
+$bomTool = Join-Path $repoRoot 'tools\ensure_bom.py'
 
-foreach ($required in @($Python, $spec, $inspector, $overrideTool)) {
+foreach ($required in @($Python, $spec, $inspector, $overrideTool, $bomTool)) {
     if (-not (Test-Path -LiteralPath $required)) { throw "缺少构建输入：$required" }
 }
+# 先确保含中文的 .ps1 都带 BOM（编辑工具会把 BOM 弄丢，5.1 会因此假语法报错）
+& $Python $bomTool | Write-Host
 $sourceInternal = Join-Path $SourceBundle '_internal'
 if (-not (Test-Path -LiteralPath (Join-Path $sourceInternal 'app\main_window.pyc'))) {
     throw "SourceBundle 不像便携包（缺 _internal\app\main_window.pyc）：$SourceBundle"
@@ -49,26 +52,38 @@ Write-Host '[2/5] 计算 stdlib 补齐清单…'
 & $Python $inspector | Write-Host
 if ($LASTEXITCODE -ne 0) { throw 'inspect_pyz.py 失败' }
 
-# 2) 重新编译 EXE
+# 2) 重新编译 EXE（含提权输入助手）
 if (-not $SkipBuild) {
     Write-Host '[3/5] PyInstaller 重编 二游辅助.exe…'
     & $Python -m PyInstaller --noconfirm --clean `
         --distpath (Join-Path $repoRoot 'build\dist') `
         --workpath (Join-Path $repoRoot 'build\work') $spec | Select-Object -Last 3 | Write-Host
-    if ($LASTEXITCODE -ne 0) { throw 'PyInstaller 构建失败' }
+    if ($LASTEXITCODE -ne 0) { throw 'PyInstaller 构建失败（主程序）' }
+
+    # 提权助手必须跟着 elevated_input_helper.py 一起重编（它承担提权游戏下的快捷键）
+    $helperSpec = Join-Path $legacyRoot 'packaging\game_input_helper.spec'
+    if (Test-Path -LiteralPath $helperSpec) {
+        Write-Host '[3/5] PyInstaller 重编 mabao-game-input-helper.exe…'
+        & $Python -m PyInstaller --noconfirm --clean `
+            --distpath (Join-Path $repoRoot 'build\helper-dist') `
+            --workpath (Join-Path $repoRoot 'build\helper-work') $helperSpec | Select-Object -Last 2 | Write-Host
+        if ($LASTEXITCODE -ne 0) { throw 'PyInstaller 构建失败（提权助手）' }
+    }
 } else {
     Write-Host '[3/5] 跳过重编（-SkipBuild）'
 }
 if (-not (Test-Path -LiteralPath $distExe)) { throw "没有产出 EXE：$distExe" }
 
-# 3) 组装：新 EXE + 依赖来源的 _internal + 可选 helper
+# 3) 组装：新 EXE + 依赖来源的 _internal + 新编/复制的 helper
 Write-Host "[4/5] 组装到 $OutBundle …"
 if (Test-Path -LiteralPath $OutBundle) { Remove-Item -LiteralPath $OutBundle -Recurse -Force }
 New-Item -ItemType Directory -Path $OutBundle -Force | Out-Null
 Copy-Item -LiteralPath $distExe -Destination (Join-Path $OutBundle '二游辅助.exe') -Force
-$helper = Join-Path $SourceBundle 'mabao-game-input-helper.exe'
+$builtHelper = Join-Path $repoRoot 'build\helper-dist\mabao-game-input-helper.exe'
+$helper = if (Test-Path -LiteralPath $builtHelper) { $builtHelper } else { Join-Path $SourceBundle 'mabao-game-input-helper.exe' }
 if (Test-Path -LiteralPath $helper) {
     Copy-Item -LiteralPath $helper -Destination (Join-Path $OutBundle 'mabao-game-input-helper.exe') -Force
+    Write-Host ("  helper 来源   = {0}" -f $helper)
 }
 robocopy $sourceInternal (Join-Path $OutBundle '_internal') /E /R:1 /W:1 /NFL /NDL /NJH /NJS /NP | Out-Null
 if ($LASTEXITCODE -ge 8) { throw "复制 _internal 失败（robocopy $LASTEXITCODE）" }

@@ -120,20 +120,22 @@ def post_action(code: int, source: str) -> None:
 
 
 def install_task() -> int:
+    """（需要管理员）注册一个「提权启动器」任务，然后立刻跑起来。
+
+    2026-09-20 安全性调整：
+      * 不再把 helper 复制到 Program Files，直接在程序目录里运行（删程序就干净）；
+      * 任务用 /SC ONCE + 2030 年的日期，等于「永不自动触发」，只作为
+        schtasks /Run 的提权入口 —— 不再是 ONLOGON 常驻自启；
+      * helper 自己会在主程序消失 30~60 秒后退出，提权钩子的存活期 = 主程序存活期。
+    """
     source = Path(sys.executable).resolve()
-    program_files = Path(os.environ.get("ProgramFiles", r"C:\Program Files"))
-    destination_dir = program_files / "MabaoLocalInputHelper"
-    destination_dir.mkdir(parents=True, exist_ok=True)
-    destination = destination_dir / HELPER_NAME
     subprocess.run(
         ["schtasks", "/End", "/TN", TASK_NAME],
         capture_output=True,
         creationflags=subprocess.CREATE_NO_WINDOW,
         check=False,
     )
-    if source != destination:
-        shutil.copy2(source, destination)
-    task_action = f'"{destination}" --daemon'
+    task_action = f'"{source}" --daemon'
     result = subprocess.run(
         [
             "schtasks",
@@ -141,7 +143,11 @@ def install_task() -> int:
             "/TN",
             TASK_NAME,
             "/SC",
-            "ONLOGON",
+            "ONCE",
+            "/SD",
+            "2030/01/01",
+            "/ST",
+            "00:00",
             "/RL",
             "HIGHEST",
             "/IT",
@@ -151,8 +157,6 @@ def install_task() -> int:
         ],
         capture_output=True,
         text=True,
-        encoding="utf-8",
-        errors="replace",
         creationflags=subprocess.CREATE_NO_WINDOW,
         check=False,
     )

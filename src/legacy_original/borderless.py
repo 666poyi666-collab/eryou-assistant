@@ -12,7 +12,39 @@
 from __future__ import annotations
 
 import importlib
+import json
+import os
+from pathlib import Path
 from typing import Any
+
+STATE_FILE = Path(
+    os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"))
+) / "MabaoLocal" / "ui-state.json"
+
+
+def _load_saved() -> bool:
+    try:
+        return bool(json.loads(STATE_FILE.read_text(encoding="utf-8")).get("borderless", False))
+    except (OSError, ValueError, TypeError):
+        return False
+
+
+def _save(enabled: bool) -> None:
+    """记住上次的边框状态；写失败不影响使用。"""
+    try:
+        payload: dict[str, Any] = {}
+        if STATE_FILE.is_file():
+            try:
+                payload = json.loads(STATE_FILE.read_text(encoding="utf-8"))
+            except (OSError, ValueError, TypeError):
+                payload = {}
+        payload["borderless"] = bool(enabled)
+        STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        temporary = STATE_FILE.with_suffix(".tmp")
+        temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        temporary.replace(STATE_FILE)
+    except OSError:
+        pass
 
 
 def install_borderless(main_window_module: Any, qt_core: Any, qt_widgets: Any, logger: Any) -> None:
@@ -76,7 +108,15 @@ def _install(window: Any, qt_core: Any, qt_widgets: Any, logger: Any) -> None:
         button = None
         try:
             game_button = importlib.import_module("app.game_button")
-            button = game_button.GameButton("还原", holder)
+            # GameButton 的构造签名没有公开文档，这里按几种可能依次尝试
+            for arguments in (("还原", holder), (holder,), ()):
+                try:
+                    button = game_button.GameButton(*arguments)
+                except TypeError:
+                    continue
+                break
+            if button is not None and hasattr(button, "setText"):
+                button.setText("还原")
         except Exception:  # noqa: BLE001
             logger.debug("GameButton 不可用，用普通按钮代替", exc_info=True)
         if button is None:
@@ -144,6 +184,7 @@ def _install(window: Any, qt_core: Any, qt_widgets: Any, logger: Any) -> None:
             button = state.get("button")
             if button is not None:
                 button.setToolTip("退出无边框（F10）" if state["on"] else "一键无边框：只留视频画面（F10）")
+            _save(state["on"])
         except Exception:  # noqa: BLE001
             logger.exception("切换无边框失败")
 
@@ -206,3 +247,11 @@ def _install(window: Any, qt_core: Any, qt_widgets: Any, logger: Any) -> None:
         logger.debug("还原按钮跟随定时器启动失败", exc_info=True)
 
     logger.info("无边框按钮已就绪（标题栏 ⛶ / F10）")
+
+    # 恢复上次的边框状态：等窗口 show 出来、标题栏布局稳定后再收起
+    if _load_saved():
+        try:
+            qt_core.QTimer.singleShot(1200, lambda: set_borderless(True))
+            logger.info("检测到上次是无边框模式，启动后自动恢复")
+        except Exception:  # noqa: BLE001
+            logger.debug("恢复无边框状态失败", exc_info=True)

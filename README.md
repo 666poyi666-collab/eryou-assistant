@@ -25,10 +25,15 @@
 2. 在地址栏粘贴攻略链接（B 站视频 / 网页）后回车。
 3. 播放时 `~` 播放/暂停，`=` 循环倍速（1x / 1.25x / 1.5x / 2x），鼠标侧键 X1/X2 快退/快进
    （映射来自 `~\.mabao\hotkeys.json` 的 `side_buttons`）。
-4. 标题栏 `⛶` 进入**一键无边框**（只留画面、仍可缩放），右上角「还原」或 `F10` 切回。
+4. 标题栏 `⛶` 进入**一键无边框**（只留画面、仍可缩放），右上角「还原」或 `F10` 切回；
+   **状态会记忆**（`%LOCALAPPDATA%\MabaoLocal\ui-state.json`），下次启动自动恢复。
 5. 登录态存在 `%LOCALAPPDATA%\懒宝浏览器\WebView2_UserData`（可用环境变量
    `MABAO_WEBVIEW_PROFILE` 固定到别处）；登录后画质不再被压在 1080P。
-6. 日志在 `%LOCALAPPDATA%\MabaoLocal\logs\<yyyy-MM-dd>.log`，设置在同目录（`~\.mabao\`）。
+6. **进游戏后快捷键仍然有效**：原神在本机是「已提权」进程（`rid=0x3000`），
+   普通进程的全局热键会被 UIPI 挡掉，所以程序会按需拉起提权输入助手
+   （任务 `MabaoLocalGameInput`：一次性、非自启、助手在程序目录、随主程序退出）。
+   不想要助手就设 `MABAO_DISABLE_ELEVATED_INPUT_HELPER=1`。
+7. 日志在 `%LOCALAPPDATA%\MabaoLocal\logs\<yyyy-MM-dd>.log`，设置在同目录（`~\.mabao\`）。
 
 ## 改源码后怎么生效（重要）
 
