@@ -11,7 +11,6 @@ from ctypes import (
     WINFUNCTYPE,
     byref,
     c_int,
-    c_long,
     create_unicode_buffer,
     windll,
     wintypes,
@@ -26,6 +25,7 @@ from local_features import (
     default_settings_path,
     playback_speed_script,
 )
+from borderless import install_borderless
 
 
 def load_bilibili_guest_hd_script() -> str:
@@ -44,7 +44,13 @@ def load_bilibili_guest_hd_script() -> str:
 
 
 def rewrite_bilibili_playurl(url: str) -> str:
-    """Route Bilibili media manifests through its anonymous preview endpoint."""
+    """Route Bilibili media manifests through its anonymous preview endpoint.
+
+    画质策略（2026-09-20 调整）：原来一律把 qn 压成 80，等于无论登录与否都锁死
+    1080P。现在改成「至少 80，更高则保留」——游客仍然拿到 1080P 试看，
+    已登录/大会员（配合 quality_boost 脚本把 qn 抬到 120）就能拿到 1080P60/1080P+/4K，
+    具体上限由服务端按账号权限决定。
+    """
     try:
         parts = urlsplit(url)
     except ValueError:
@@ -59,8 +65,57 @@ def rewrite_bilibili_playurl(url: str) -> str:
     query = dict(parse_qsl(parts.query, keep_blank_values=True))
     query.pop("w_rid", None)
     query.pop("wts", None)
-    query.update(qn="80", fnval="4048", fnver="0", fourk="1", try_look="1")
+    try:
+        requested = int(str(query.get("qn", "")).strip() or "0")
+    except ValueError:
+        requested = 0
+    query.update(qn=str(max(requested, 80)), fnval="4048", fnver="0", fourk="1", try_look="1")
     return urlunsplit((parts.scheme, parts.netloc, path, urlencode(query), parts.fragment))
+
+
+# 登录后把播放请求的画质抬到服务端允许的最高档；未登录（游客）保持原样，
+# 仍然是「try_look 试看 + 1080P」。脚本在 document-start 注入，早于播放器发请求。
+QUALITY_BOOST_SCRIPT = r"""
+(() => {
+  const loggedIn = /(?:^|;\s*)(DedeUserID|SESSDATA)=/.test(document.cookie || '');
+  if (!loggedIn) return;
+  const TARGET_QN = '120';
+  const bump = (url) => {
+    try {
+      if (typeof url !== 'string') return url;
+      if (url.indexOf('/playurl') === -1) return url;
+      if (!/\/x\/player\/|\/pgc\/player\//.test(url)) return url;
+      const u = new URL(url, location.href);
+      const current = parseInt(u.searchParams.get('qn') || '0', 10) || 0;
+      if (current < parseInt(TARGET_QN, 10)) {
+        u.searchParams.set('qn', TARGET_QN);
+      }
+      return u.toString();
+    } catch (_) {
+      return url;
+    }
+  };
+  try {
+    const originalOpen = XMLHttpRequest.prototype.open;
+    XMLHttpRequest.prototype.open = function (method, url, ...rest) {
+      return originalOpen.call(this, method, bump(url), ...rest);
+    };
+  } catch (_) {}
+  try {
+    const originalFetch = window.fetch;
+    if (originalFetch) {
+      window.fetch = function (input, init) {
+        try {
+          if (typeof input === 'string') input = bump(input);
+          else if (input && input.url) input = new Request(bump(input.url), input);
+        } catch (_) {}
+        return originalFetch.call(this, input, init);
+      };
+    }
+  } catch (_) {}
+  window.__mabaoQualityBoost = TARGET_QN;
+})();
+"""
 
 
 AD_SCRIPT = r"""
@@ -142,14 +197,8 @@ color:#20242a;font-family:'Microsoft YaHei',sans-serif}h1{font-size:28px;font-we
 
 _DLL_DIRECTORIES = []
 GAME_INPUT_TASK = "MabaoLocalGameInput"
+ELEVATED_INPUT_HELPER_ENV = "MABAO_ENABLE_ELEVATED_INPUT_HELPER"
 VK_CONTROL = 0x11
-GWL_EXSTYLE = -20
-WS_EX_NOACTIVATE = 0x08000000
-SWP_NOSIZE = 0x0001
-SWP_NOMOVE = 0x0002
-SWP_NOZORDER = 0x0004
-SWP_NOACTIVATE = 0x0010
-SWP_FRAMECHANGED = 0x0020
 ERROR_ALREADY_EXISTS = 183
 SW_RESTORE = 9
 SINGLE_INSTANCE_MUTEX = r"Local\MabaoLocalMainWindow"
@@ -444,6 +493,13 @@ def setup_runtime_logging() -> None:
 
 
 def start_elevated_input_helper() -> None:
+    # A low-level global hook running elevated is not safe as a normal startup
+    # dependency: anti-cheat software may terminate the game, and it violates
+    # the local build's no-admin-by-default contract.  Keep the legacy helper
+    # available only as an explicit opt-in for users who knowingly need it for
+    # an elevated game process.
+    if os.environ.get(ELEVATED_INPUT_HELPER_ENV, "").strip() != "1":
+        return
     if not getattr(sys, "frozen", False):
         return
     if os.environ.get("MABAO_LOCAL_SELF_TEST") == "1" or os.environ.get(
@@ -507,66 +563,8 @@ def install_application_identity(app, qt_gui) -> None:
         app.setWindowIcon(qt_gui.QIcon(str(icon_path)))
 
 
-def sync_game_no_activate(window, bridge: NativeInputBridge) -> None:
-    user32 = windll.user32
-    user32.GetWindowLongW.argtypes = (wintypes.HWND, c_int)
-    user32.GetWindowLongW.restype = c_long
-    user32.SetWindowLongW.argtypes = (wintypes.HWND, c_int, c_long)
-    user32.SetWindowLongW.restype = c_long
-    user32.SetWindowPos.argtypes = (
-        wintypes.HWND,
-        wintypes.HWND,
-        c_int,
-        c_int,
-        c_int,
-        c_int,
-        wintypes.UINT,
-    )
-    user32.SetWindowPos.restype = wintypes.BOOL
-    enum_proc_type = WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
-    user32.EnumWindows.argtypes = (enum_proc_type, wintypes.LPARAM)
-    user32.EnumWindows.restype = wintypes.BOOL
-    user32.GetWindowThreadProcessId.argtypes = (
-        wintypes.HWND,
-        POINTER(wintypes.DWORD),
-    )
-    user32.GetWindowThreadProcessId.restype = wintypes.DWORD
-    control_down = bool(windll.user32.GetAsyncKeyState(VK_CONTROL) & 0x8000)
-    desired = should_prevent_window_activation(bridge._active, control_down)
-    process_windows: set[int] = set()
-
-    @enum_proc_type
-    def collect(hwnd, _lparam):
-        process_id = wintypes.DWORD()
-        user32.GetWindowThreadProcessId(hwnd, byref(process_id))
-        if process_id.value == os.getpid():
-            process_windows.add(int(hwnd))
-        return True
-
-    user32.EnumWindows(collect, 0)
-    process_windows.add(int(window.winId()))
-    previous = getattr(window, "_mabao_no_activate_windows", set())
-    for hwnd in process_windows | previous:
-        enable = desired and hwnd in process_windows
-        style = user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
-        new_style = style | WS_EX_NOACTIVATE if enable else style & ~WS_EX_NOACTIVATE
-        if new_style == style:
-            continue
-        user32.SetWindowLongW(hwnd, GWL_EXSTYLE, new_style)
-        user32.SetWindowPos(
-            hwnd,
-            None,
-            0,
-            0,
-            0,
-            0,
-            SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
-        )
-    window._mabao_no_activate_windows = process_windows if desired else set()
-
-
-def install_settings_focus_guard(main_window_module, qt_core, bridge, window) -> None:
-    """Prevent show_settings() from activating a dialog before the sync tick."""
+def install_settings_focus_guard(main_window_module, qt_core, bridge) -> None:
+    """Keep settings passive while a game is foreground without rewriting styles."""
     dialog_type = getattr(main_window_module, "BlurDialog", None)
     if dialog_type is None or getattr(dialog_type, "_mabao_focus_guard", False):
         return
@@ -584,12 +582,11 @@ def install_settings_focus_guard(main_window_module, qt_core, bridge, window) ->
             self.setAttribute(qt_core.Qt.WA_ShowWithoutActivating, True)
         result = original_show(self, *args, **kwargs)
         if guarded:
-            sync_game_no_activate(window, bridge)
+            self.setAttribute(qt_core.Qt.WA_ShowWithoutActivating, False)
         return result
 
     def guarded_activate(self, *args, **kwargs):
         if game_blocks_activation():
-            sync_game_no_activate(window, bridge)
             return False
         self.setAttribute(qt_core.Qt.WA_ShowWithoutActivating, False)
         return original_activate(self, *args, **kwargs)
@@ -1609,6 +1606,12 @@ def install_document_start_script() -> None:
                     len(script.encode("utf-8")),
                     hashlib.sha256(script.encode("utf-8")).hexdigest(),
                 )
+                boost = core.AddScriptToExecuteOnDocumentCreatedAsync(QUALITY_BOOST_SCRIPT)
+                logger.info(
+                    "画质解锁脚本已注册: task=%s bytes=%s（登录后最高画质由服务端按账号权限决定）",
+                    boost,
+                    len(QUALITY_BOOST_SCRIPT.encode("utf-8")),
+                )
             except Exception:
                 logger.exception("Bilibili guest script registration failed")
         return original(self, sender, args)
@@ -1658,32 +1661,63 @@ def install_action_debounce(main_window) -> None:
 
 def start_native_input() -> NativeInputBridge:
     settings = importlib.import_module("app.settings").SettingsManager()
+    side_actions = settings.get_side_buttons()
     bridge = NativeInputBridge(
-        settings.get_side_buttons(),
+        side_actions,
         force_active=os.environ.get("MABAO_NATIVE_INPUT_TEST_ALWAYS_ACTIVE") == "1",
     )
     bridge.start()
+    importlib.import_module("app.logger").get_logger("local.native_input").info(
+        "侧键映射（来自 hotkeys.json side_buttons）: %s -> %s",
+        side_actions,
+        "、".join(f"{key}={value}" for key, value in side_actions.items()) or "空",
+    )
     return bridge
+
+
+def install_side_button_ownership(main_window) -> None:
+    """侧键只由本地 Raw Input 桥接处理。
+
+    原版 HotkeyManager 自带一个 WH_MOUSE_LL 低级钩子，也会按 hotkeys.json 的
+    side_buttons 派发侧键；本地 launcher 又用 Raw Input 派发同一批按键。
+    两个 handler 抢同一个物理键，表现就是「侧键设了快进/快退，但只有一个生效」：
+    例如原版钩子把两个键都当成后退，同时本地桥接又发了前进 → 一退一进看起来没反应。
+    这里在原版注册完之后清掉它自己的侧键回调，让本地桥接独占。
+    """
+
+    original_init_hotkeys = main_window.MainWindow._init_hotkeys
+    logger = importlib.import_module("app.logger").get_logger("local.native_input")
+
+    def init_hotkeys_side_buttons_local_only(self):
+        original_init_hotkeys(self)
+        try:
+            manager = getattr(self, "hotkey_manager", None)
+            if manager is None:
+                return
+            callbacks = getattr(manager, "_side_button_callbacks", None)
+            actions = getattr(manager, "_side_button_actions", None)
+            removed = 0
+            if isinstance(callbacks, dict):
+                removed += len(callbacks)
+                callbacks.clear()
+            if isinstance(actions, dict):
+                actions.clear()
+            logger.info(
+                "侧键已改由本地 Raw Input 桥接独占（清掉原版低级钩子的 %s 个侧键回调）",
+                removed,
+            )
+        except Exception:
+            logger.exception("清理原版侧键回调失败（本地桥接仍可用）")
+
+    main_window.MainWindow._init_hotkeys = init_hotkeys_side_buttons_local_only
 
 
 def install_native_input(window, qt_core, bridge: NativeInputBridge) -> None:
     timer = qt_core.QTimer(window)
     timer.setInterval(NATIVE_INPUT_INTERVAL_MS)
     logger = importlib.import_module("app.logger").get_logger("local.native_input")
-    sync_state = {"active": None, "control": None, "next_sync": 0.0}
 
     def dispatch():
-        now = time.monotonic()
-        active = bool(bridge._active)
-        control_down = bool(windll.user32.GetAsyncKeyState(VK_CONTROL) & 0x8000)
-        should_sync = (
-            active != sync_state["active"]
-            or control_down != sync_state["control"]
-            or (active and now >= sync_state["next_sync"])
-        )
-        if should_sync:
-            sync_game_no_activate(window, bridge)
-            sync_state.update(active=active, control=control_down, next_sync=now + 0.25)
         callbacks = {
             "toggle_play": window.toggle_play,
             "fast_backward": window.fast_backward,
@@ -1954,9 +1988,16 @@ def main() -> int:
     install_web_runtime(playback_state)
     main_window = importlib.import_module("app.main_window")
     install_ai_navigation_runtime(main_window, qt_core, qt_gui)
+    install_borderless(
+        main_window,
+        qt_core,
+        qt_widgets,
+        importlib.import_module("app.logger").get_logger("local.borderless"),
+    )
     install_playback_hotkey_lifecycle(main_window, playback_state)
     install_media_controls(main_window)
     install_action_debounce(main_window)
+    install_side_button_ownership(main_window)
     install_safe_close(main_window)
     app = qt_widgets.QApplication(sys.argv)
     install_application_identity(app, qt_gui)
@@ -1969,9 +2010,15 @@ def main() -> int:
     window._tiandun_auth = None
     window._local_full_access = True
     install_native_input(window, qt_core, native_input_bridge)
-    install_settings_focus_guard(main_window, qt_core, native_input_bridge, window)
+    install_settings_focus_guard(main_window, qt_core, native_input_bridge)
     window.setAttribute(qt_core.Qt.WA_ShowWithoutActivating, True)
     window.show()
+    # This attribute is only for the initial show.  Leaving it set makes a
+    # taskbar click look like a minimize/restore cycle instead of normal
+    # activation.
+    qt_core.QTimer.singleShot(
+        0, lambda: window.setAttribute(qt_core.Qt.WA_ShowWithoutActivating, False)
+    )
     qt_core.QTimer.singleShot(500, start_elevated_input_helper)
     schedule_bilibili_runtime_probe(window, qt_core)
     schedule_runtime_self_test(app, window, playback_state, qt_core)

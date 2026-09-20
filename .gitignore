@@ -17,3 +17,5 @@ __pycache__/
 # 本地产物
 artifacts/
 *.log
+app.previous/
+

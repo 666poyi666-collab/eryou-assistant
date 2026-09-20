@@ -200,7 +200,10 @@ def test_runtime_fixes_are_installed_before_main_window() -> None:
     assert "native_input_bridge = start_native_input()" in source
     assert "install_native_input(window, qt_core, native_input_bridge)" in source
     assert "WA_ShowWithoutActivating" in source
-    assert "sync_game_no_activate(window, bridge)" in source
+    assert "sync_game_no_activate" not in source
+    assert "WS_EX_NOACTIVATE" not in source
+    assert 'ELEVATED_INPUT_HELPER_ENV = "MABAO_ENABLE_ELEVATED_INPUT_HELPER"' in source
+    assert 'os.environ.get(ELEVATED_INPUT_HELPER_ENV, "").strip() != "1"' in source
     assert "AddScriptToExecuteOnDocumentCreatedAsync" in source
     assert "Bilibili guest script registration queued" in source
     assert "load_bilibili_guest_hd_script()" in source
@@ -217,9 +220,7 @@ def test_runtime_fixes_are_installed_before_main_window() -> None:
     assert "LOCAL_HOME_HTML" in source
     assert 'app.setApplicationName("二游辅助")' in source
     assert "install_application_identity(app, qt_gui)" in source
-    assert (
-        "install_settings_focus_guard(main_window, qt_core, native_input_bridge, window)" in source
-    )
+    assert "install_settings_focus_guard(main_window, qt_core, native_input_bridge)" in source
     assert "guarded_activate" in source
     assert "install_ai_navigation_runtime(main_window, qt_core, qt_gui)" in source
     assert "AI_NAV_INTERVAL_MS = 500" in source
@@ -283,6 +284,13 @@ def test_game_window_clicks_do_not_activate_without_explicit_control_key() -> No
     assert should_prevent_window_activation(True, False)
     assert not should_prevent_window_activation(True, True)
     assert not should_prevent_window_activation(False, False)
+
+
+def test_game_switching_does_not_mutate_application_window_styles() -> None:
+    source = (ROOT / "launcher.py").read_text(encoding="utf-8")
+    assert "SetWindowLongW" not in source
+    assert "SetWindowPos" not in source
+    assert "QTimer.singleShot(\n        0, lambda: window.setAttribute" in source
 
 
 def test_ai_region_origin_stays_inside_browser_bounds() -> None:
