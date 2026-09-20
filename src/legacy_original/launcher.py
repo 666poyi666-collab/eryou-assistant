@@ -26,6 +26,8 @@ from local_features import (
     playback_speed_script,
 )
 from borderless import install_borderless
+from playback_guard import install_playback_guard
+from tray import install_tray
 
 
 def load_bilibili_guest_hd_script() -> str:
@@ -80,8 +82,12 @@ QUALITY_BOOST_SCRIPT = r"""
   const loggedIn = /(?:^|;\s*)(DedeUserID|SESSDATA)=/.test(document.cookie || '');
   if (!loggedIn) return;
   const TARGET_QN = '120';
+  // 只对本次页面加载的第一个 playurl 请求生效：避免播放器后续自动切清晰度时
+  // 被我们反复改成 4K，触发媒体重载（那会导致网页全屏被踢出来）。
+  let applied = false;
   const bump = (url) => {
     try {
+      if (applied) return url;
       if (typeof url !== 'string') return url;
       if (url.indexOf('/playurl') === -1) return url;
       if (!/\/x\/player\/|\/pgc\/player\//.test(url)) return url;
@@ -90,6 +96,7 @@ QUALITY_BOOST_SCRIPT = r"""
       if (current < parseInt(TARGET_QN, 10)) {
         u.searchParams.set('qn', TARGET_QN);
       }
+      applied = true;
       return u.toString();
     } catch (_) {
       return url;
@@ -114,6 +121,89 @@ QUALITY_BOOST_SCRIPT = r"""
     }
   } catch (_) {}
   window.__mabaoQualityBoost = TARGET_QN;
+})();
+"""
+
+
+# 网页全屏守卫（document-start 注入）：记录全屏进出、把被隐藏的弹窗摘出焦点链、
+# 非用户按 Esc 导致的退出就尝试自动回全屏（Chromium 需要用户手势，失败会记原因）。
+FULLSCREEN_GUARD_SCRIPT = r"""
+(() => {
+  try {
+    if (window.__mabaoFsGuard) return;
+    const state = { log: [], intent: false, blocked: 0 };
+    window.__mabaoFsGuard = state;
+    window.__mabaoFullscreenStatus = () => {
+      try {
+        return JSON.stringify({
+          fullscreen: Boolean(document.fullscreenElement),
+          intent: state.intent,
+          blocked: state.blocked,
+          log: state.log.slice(-12)
+        });
+      } catch (_) { return ''; }
+    };
+    const HIDDEN = [
+      '.bili-mini-mask', '.bili-mini-content-wp', '.bili-mini-login-right-wp',
+      '.bili-mini-customer-title', '.bili-mini-close-icon',
+      '[role="dialog"][class*="login"]', '[class*="login-mask"]',
+      '[class*="login-panel"]', '[class*="login-popover"]',
+      '[class*="bpx-player-toast"]',
+      '[class*="bpx-player-login"]',
+      '[class*="bpx-player-guide"]',
+      '[class*="video-card-ad"]', '[class*="commercial-card"]'
+    ].join(',');
+    const push = (event, extra) => {
+      state.log.push(Object.assign({ t: Date.now(), event: event }, extra || {}));
+      if (state.log.length > 30) state.log.shift();
+    };
+    let lastEscape = 0;
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' || e.keyCode === 27) lastEscape = Date.now();
+    }, true);
+    document.addEventListener('fullscreenchange', () => {
+      const el = document.fullscreenElement;
+      if (el) { state.intent = true; push('enter'); return; }
+      const byUser = Date.now() - lastEscape < 700;
+      push('exit', { byUser: byUser });
+      if (!state.intent || byUser) { state.intent = false; return; }
+      setTimeout(() => {
+        try {
+          const target = document.querySelector('.bpx-player-container')
+            || document.querySelector('video')
+            || document.documentElement;
+          if (target && target.requestFullscreen) {
+            const p = target.requestFullscreen();
+            if (p && p.catch) {
+              p.catch((err) => push('reenter-failed', { msg: String((err && err.message) || err).slice(0, 90) }));
+            }
+            push('reenter', { tag: String(target.className || target.tagName).slice(0, 40) });
+          }
+        } catch (err) {
+          push('reenter-threw', { msg: String(err).slice(0, 90) });
+        }
+      }, 500);
+    }, true);
+    document.addEventListener('focusin', (e) => {
+      const el = e.target;
+      if (!el || !el.closest) return;
+      try {
+        if (el.closest(HIDDEN)) { state.blocked += 1; el.blur(); }
+      } catch (_) {}
+    }, true);
+    const cleanup = () => {
+      try {
+        document.querySelectorAll(HIDDEN).forEach((n) => {
+          n.style.setProperty('display', 'none', 'important');
+          n.style.setProperty('pointer-events', 'none', 'important');
+          n.setAttribute('aria-hidden', 'true');
+        });
+      } catch (_) {}
+    };
+    cleanup();
+    setInterval(cleanup, 1500);
+    document.addEventListener('DOMContentLoaded', cleanup, true);
+  } catch (_) {}
 })();
 """
 
@@ -1626,6 +1716,12 @@ def install_document_start_script() -> None:
                     boost,
                     len(QUALITY_BOOST_SCRIPT.encode("utf-8")),
                 )
+                guard = core.AddScriptToExecuteOnDocumentCreatedAsync(FULLSCREEN_GUARD_SCRIPT)
+                logger.info(
+                    "网页全屏守卫已注册: task=%s bytes=%s",
+                    guard,
+                    len(FULLSCREEN_GUARD_SCRIPT.encode("utf-8")),
+                )
             except Exception:
                 logger.exception("Bilibili guest script registration failed")
         return original(self, sender, args)
@@ -2007,6 +2103,18 @@ def main() -> int:
         qt_core,
         qt_widgets,
         importlib.import_module("app.logger").get_logger("local.borderless"),
+    )
+    install_tray(
+        main_window,
+        qt_core,
+        qt_gui,
+        qt_widgets,
+        importlib.import_module("app.logger").get_logger("local.tray"),
+    )
+    install_playback_guard(
+        main_window,
+        qt_core,
+        importlib.import_module("app.logger").get_logger("local.playback_guard"),
     )
     install_playback_hotkey_lifecycle(main_window, playback_state)
     install_media_controls(main_window)

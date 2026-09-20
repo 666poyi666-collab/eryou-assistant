@@ -191,6 +191,11 @@ def _install(window: Any, qt_core: Any, qt_widgets: Any, logger: Any) -> None:
     def toggle() -> None:
         set_borderless(not state["on"])
 
+    # 暴露给托盘菜单用
+    window._mabao_borderless_toggle = toggle
+    window._mabao_borderless_set = set_borderless
+    window._mabao_borderless_is_on = lambda: bool(state["on"])
+
     # ---------- 标题栏按钮 ----------
     button = None
     maker = getattr(bar, "_make_button", None)
