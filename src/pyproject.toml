@@ -1,0 +1,48 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "eryou-assistant"
+version = "0.4.0"
+description = "二游辅助 - 免费开源 Windows 桌面辅助工具"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+authors = [{ name = "二游辅助 contributors" }]
+dependencies = [
+  "PySide6>=6.7,<7",
+  "pythonnet>=3.0.5,<3.1",
+  "qtwebview2>=0.5,<0.6",
+]
+
+[project.optional-dependencies]
+dev = [
+  "build>=1.2,<2",
+  "pyinstaller>=6.16,<7",
+  "pytest>=8.2,<9",
+  "pytest-qt>=4.4,<5",
+  "ruff>=0.6,<1",
+]
+ai = [
+  "numpy>=1.26,<3",
+  "onnxruntime>=1.18,<2",
+  "opencv-python-headless>=4.10,<5",
+]
+
+[project.scripts]
+eryou-assistant = "eryou_assistant.application:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/eryou_assistant"]
+
+[tool.pytest.ini_options]
+addopts = "-q"
+testpaths = ["tests", "legacy_original/tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]

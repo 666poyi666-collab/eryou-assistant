@@ -1,0 +1,18 @@
+二游辅助源码快照来源
+====================
+
+仓库   : https://github.com/666poyi666-collab/er-you-auto-workspace
+tag    : v0.2.0
+commit : ec43b31  (fix: stabilize Bilibili playback and single instance)
+导出日 : 2026-09-20
+
+内容说明
+--------
+* src/eryou_assistant/   —— 重写版源码（PySide6 + qtwebview2），可本地运行/打包
+* legacy_original/       —— 旧版「懒人妈宝 6.0」的本地补丁层与打包脚本（launcher.py、
+                            overrides/、bili_guest_hd.user.js、build-local.ps1、spec）
+                            注意：原版 app 功能模块是字节码，需从原版 mabao.exe 提取，
+                            该安装目录已不在本机，所以这份快照无法直接重新打包便携版
+* packaging/ assets/ scripts/ tests/ docs/ pyproject.toml 等 —— 构建与质量门禁
+
+便携版运行体不在这里，在上一级 app/（由 tools/extract_portable.py 从发布包解出）。

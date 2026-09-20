@@ -1,0 +1,19 @@
+# 运行体与本地留档：体积大、可重建，不进源码树
+app/
+发布存档/
+
+# 构建产物
+dist/
+build/
+*.spec.bak
+
+# Python / 缓存
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+
+# 本地产物
+artifacts/
+*.log

@@ -1,0 +1,145 @@
+{
+  "_comment": "自动对话游戏配置：按下 '-' 键时，鼠标所在窗口标题命中 patterns 才开启识别；",
+  "genshin": {
+    "display_name": "原神",
+    "enabled": true,
+    "window_title_match": {
+      "mode": "exact_contains",
+      "patterns": ["原神", "Genshin Impact", "Genshin"]
+    },
+    "window_class_match": {
+      "mode": "exact",
+      "patterns": ["UnityWndClass", "UnityWndClassPopup"]
+    },
+    "process_name_match": {
+      "patterns": ["YuanShen.exe", "GenshinImpact.exe", "Genshin Impact.exe", "GenshinImpact"]
+    },
+    "aspect_ratio_required": [16, 9],
+    "aspect_ratio_tolerance": 0.005,
+    "base_resolution": [2560, 1440],
+    "base_dpi_scale": 1.0,
+    "templates": [
+      {
+        "id": "dialog_triangle",
+        "display_name": "对话小三角（对话出现时会有）",
+        "template_path": "datas/imgs/template/原神_对话小三角.png",
+        "base_region": [1234, 1286, 1330, 1429],
+        "trigger_action": "press_F_key",
+        "enabled": true,
+        "threshold_overrides": {
+          "_comment": "Triangle宽松版(紧急修复)：硬阈值全面放宽，确保运行时score=0.49能通过；后续再收紧防误报",
+          "aspect_delta_max": 5.0,
+          "n_contours_delta_max": 10,
+          "fourier64_min": 0.01,
+          "dist_hist32_min": 0.01,
+          "hu7_min": 0.01,
+          "projection_min": 0.50,
+          "overall_min": 0.40,
+          "group_weights": {
+            "area_ratio": 0.20,
+            "vertex_count": 0.10,
+            "contour_mean": 0.40,
+            "projection": 0.20,
+            "aspect_soft": 0.10
+          }
+        }
+      },
+      {
+        "id": "dialog_selection",
+        "display_name": "对话选择气泡图标（有对话选项时）",
+        "template_path": "datas/imgs/template/原神_对话选择.png",
+        "base_region": [1685, 706, 1770, 1122],
+        "trigger_action": "press_F_key",
+        "enabled": true,
+        "threshold_overrides": {
+          "_comment": "Selection宽松版(紧急修复)：先极度放宽所有硬阈值，解决运行时0.05硬短路问题；后续再逐步收紧防误报",
+          "aspect_delta_max": 10.0,
+          "n_contours_delta_max": 20,
+          "fourier64_min": 0.005,
+          "dist_hist32_min": 0.005,
+          "hu7_min": 0.005,
+          "projection_min": 0.30,
+          "overall_min": 0.01,
+          "group_weights": {
+            "area_ratio": 0.15,
+            "vertex_count": 0.15,
+            "contour_mean": 0.40,
+            "projection": 0.20,
+            "aspect_soft": 0.10
+          }
+        }
+      }
+    ]
+  },
+  "starrail": {
+    "display_name": "崩坏：星穹铁道",
+    "enabled": true,
+    "window_title_match": {
+      "mode": "exact_contains",
+      "patterns": ["崩坏：星穹铁道", "HonkaiStarRail", "Honkai Star Rail"]
+    },
+    "window_class_match": {
+      "mode": "exact",
+      "patterns": ["UnityWndClass", "UnityWndClassPopup"]
+    },
+    "process_name_match": {
+      "patterns": ["StarRail.exe", "HonkaiStarRail.exe", "Honkai Star Rail.exe", "StarRail", "HonkaiStarRail"]
+    },
+    "aspect_ratio_required": [16, 9],
+    "aspect_ratio_tolerance": 0.005,
+    "base_resolution": [2560, 1440],
+    "base_dpi_scale": 1.0,
+    "templates": [
+      {
+        "id": "dialog_triangle",
+        "display_name": "对话小三角（对话出现时会有）→ 按空格推进",
+        "template_path": "datas/imgs/template/星穹铁道_对话小三角.png",
+        "base_region": [1249, 1251, 1316, 1378],
+        "trigger_action": "press_SPACE_key",
+        "enabled": true,
+        "threshold_overrides": {
+          "_comment": "Triangle宽松版（与原神一致）：确保学习模式和自动对话在各种分辨率下都能命中",
+          "aspect_delta_max": 5.0,
+          "n_contours_delta_max": 10,
+          "fourier64_min": 0.01,
+          "dist_hist32_min": 0.01,
+          "hu7_min": 0.01,
+          "projection_min": 0.50,
+          "overall_min": 0.40,
+          "group_weights": {
+            "area_ratio": 0.20,
+            "vertex_count": 0.10,
+            "contour_mean": 0.40,
+            "projection": 0.20,
+            "aspect_soft": 0.10
+          }
+        }
+      },
+      {
+        "id": "dialog_selection",
+        "display_name": "对话选择气泡图标（有对话选项时）→ 按1键选默认第一个",
+        "template_path": "datas/imgs/template/星穹铁道_对话选择.png",
+        "base_region": [1706, 637, 1821, 1093],
+        "trigger_action": "press_1_key",
+        "enabled": true,
+        "threshold_overrides": {
+          "_comment": "Selection宽松版（与原神一致）：先极度放宽所有硬阈值，避免学习/运行时低分直接被短路",
+          "aspect_delta_max": 10.0,
+          "n_contours_delta_max": 20,
+          "fourier64_min": 0.005,
+          "dist_hist32_min": 0.005,
+          "hu7_min": 0.005,
+          "projection_min": 0.30,
+          "overall_min": 0.01,
+          "group_weights": {
+            "area_ratio": 0.15,
+            "vertex_count": 0.15,
+            "contour_mean": 0.40,
+            "projection": 0.20,
+            "aspect_soft": 0.10
+          }
+        }
+      }
+    ]
+  }
+}
