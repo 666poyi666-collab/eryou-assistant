@@ -27,11 +27,75 @@ def hms(seconds: float) -> str:
     return f"{minutes} 分 {sec:02d} 秒"
 
 
+def region_of(part: str) -> str:
+    return part.split("（")[0].split("(")[0].strip()[:16]
+
+
+def build_batches(pages: list[dict], start: int, target_minutes: float) -> list[list[dict]]:
+    """把剩余分P按「每批 target_minutes 左右」切批，尽量切在区域交界处。"""
+    target = target_minutes * 60
+    batches: list[list[dict]] = []
+    current: list[dict] = []
+    current_seconds = 0.0
+    for page in pages:
+        if page["page"] < start:
+            continue
+        new_region_break = (
+            current
+            and region_of(page["part"]) != region_of(current[-1]["part"])
+            and current_seconds >= target * 0.6
+        )
+        if new_region_break or (current and current_seconds + page["duration"] > target * 1.15):
+            batches.append(current)
+            current = []
+            current_seconds = 0.0
+        current.append(page)
+        current_seconds += page["duration"]
+    if current:
+        batches.append(current)
+    return batches
+
+
+def print_plan(pages: list[dict], start: int, target_minutes: float, per_day: int, factor: float) -> None:
+    batches = build_batches(pages, start, target_minutes)
+    print()
+    print(f"=== 建议排期（每批约 {target_minutes:.0f} 分钟视频，每天 {per_day} 批，折算系数 ×{factor}）===")
+    for index, batch in enumerate(batches, 1):
+        first, last = batch[0], batch[-1]
+        seconds = sum(p["duration"] for p in batch)
+        span = (
+            f"p{first['page']}"
+            if first["page"] == last["page"]
+            else f"p{first['page']}~p{last['page']}"
+        )
+        region = region_of(last["part"])
+        print(
+            f"  第{index:>2}批  {span:<12} {len(batch):>2} 个分P  "
+            f"视频 {hms(seconds):<10} 实际约 {hms(seconds * factor):<10} {region}"
+        )
+    print()
+    days = (len(batches) + per_day - 1) // per_day
+    for day in range(days):
+        group = batches[day * per_day : (day + 1) * per_day]
+        seconds = sum(p["duration"] for batch in group for p in batch)
+        span_first = group[0][0]["page"]
+        span_last = group[-1][-1]["page"]
+        print(
+            f"  第 {day + 1} 天：{len(group)} 批（p{span_first}~p{span_last}）"
+            f"｜视频 {hms(seconds)}｜实际约 {hms(seconds * factor)}"
+        )
+    print(f"  → 共 {len(batches)} 批，按每天 {per_day} 批约 {days} 天跑完")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--bvid", default="BV1hjgG6jEa6")
     parser.add_argument("--page", type=int, default=13, help="当前/下一个分P")
     parser.add_argument("--json-out", default="")
+    parser.add_argument("--plan", action="store_true", help="输出分批排期建议")
+    parser.add_argument("--batch-minutes", type=float, default=75.0, help="每批视频时长目标（分钟）")
+    parser.add_argument("--per-day", type=int, default=2, help="每天跑几批")
+    parser.add_argument("--factor", type=float, default=1.35, help="视频→实际的折算系数")
     args = parser.parse_args(argv)
 
     request = urllib.request.Request(
@@ -84,6 +148,26 @@ def main(argv: list[str] | None = None) -> int:
         )
 
     print()
+    print("=== 已完成段（用于校准你自己的系数）===")
+    done = [p for p in pages if p["page"] < current]
+    if done:
+        done_seconds = sum(p["duration"] for p in done)
+        print(f"    p1~p{current - 1}：{len(done)} 个分P，视频时长合计 {hms(done_seconds)}")
+        print(
+            f"    如果你记得这段实际花了 T 小时，你的系数 = T ÷ {done_seconds / 3600:.2f}"
+            "（对话/过场/拾取越多，系数越大）"
+        )
+    else:
+        print("    （还没有已完成的分P）")
+
+    print()
+    print("=== 剩余里最长的 8 个分P ===")
+    for page in sorted(
+        (p for p in pages if p["page"] >= current), key=lambda p: -p["duration"]
+    )[:8]:
+        print(f"    p{page['page']:<3} {hms(page['duration']):>10}  {page['part']}")
+
+    print()
     print("=== 按区域汇总（当前分P起）===")
     buckets: dict[str, int] = {}
     order: list[str] = []
@@ -97,6 +181,9 @@ def main(argv: list[str] | None = None) -> int:
         buckets[key] += page["duration"]
     for key in order:
         print(f"    {key:<18} {hms(buckets[key])}")
+
+    if args.plan:
+        print_plan(pages, current, args.batch_minutes, args.per_day, args.factor)
     return 0
 
 
